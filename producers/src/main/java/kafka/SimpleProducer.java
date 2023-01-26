@@ -20,6 +20,7 @@ public class SimpleProducer {
         ProducerRecord<String, String> producerRecord = new ProducerRecord<>(topicName, "hello world");
 
         kafkaProducer.send(producerRecord);
+
         kafkaProducer.flush();
         kafkaProducer.close();
     }
