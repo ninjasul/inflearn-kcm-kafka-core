@@ -4,6 +4,7 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,27 +13,71 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Properties;
 
-public class WokenUpConsumer {
-    public static final Logger log = LoggerFactory.getLogger(WokenUpConsumer.class);
+public class WakenUpConsumer {
+    public static final Logger log = LoggerFactory.getLogger(WakenUpConsumer.class);
 
     public static void main(String[] args) {
+        Properties props = buildProperties();
+
+        String topicName = "simple-topic";
+        KafkaConsumer<String, String> kafkaConsumer = buildConsumer(props, topicName);
+
+        // add a ShutdownHook for the thread to invoke wakeup() method and wait until the main thread is terminated.
+        addShutdownHookToCallWakeup(kafkaConsumer);
+
+        consume(kafkaConsumer);
+    }
+
+    private static Properties buildProperties() {
         Properties props = new Properties();
         props.setProperty(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "34.64.226.236:9092");
         props.setProperty(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.setProperty(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
-        props.setProperty(ConsumerConfig.GROUP_ID_CONFIG, "group_01");
+        props.setProperty(ConsumerConfig.GROUP_ID_CONFIG, "group-01");
+        // props.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        return props;
+    }
 
-        String topicName = "simple-topic";
-
+    private static KafkaConsumer<String, String> buildConsumer(Properties props, String topicName) {
         KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(props);
         kafkaConsumer.subscribe(List.of(topicName));
+        return kafkaConsumer;
+    }
 
-        while (true) {
-            ConsumerRecords<String, String> records = kafkaConsumer.poll(Duration.ofMillis(1000L));
+    private static void addShutdownHookToCallWakeup(KafkaConsumer<String, String> kafkaConsumer) {
+        Thread mainThread = Thread.currentThread();
 
-            for (ConsumerRecord record : records) {
-                log.info("record key: {}, record value: {}, partition: {}", record.key(), record.value(), record.partition());
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            log.info("The wakeup thread starts to terminate consumer by calling wakeup() method.");
+            kafkaConsumer.wakeup();
+
+            try {
+                mainThread.join();
+            } catch (InterruptedException e) {
+                log.error("", e);
             }
+        }));
+    }
+
+    private static void consume(KafkaConsumer<String, String> kafkaConsumer) {
+        try {
+            while (true) {
+                ConsumerRecords<String, String> records = kafkaConsumer.poll(Duration.ofMillis(1000L));
+
+                for (ConsumerRecord record : records) {
+                    log.info("record key: {}, record value: {}, partition: {}, record offset: {}",
+                            record.key(),
+                            record.value(),
+                            record.partition(),
+                            record.offset()
+                    );
+                }
+            }
+        } catch (WakeupException e) {
+            log.warn("A WakeupException has been thrown.", e);
+        } finally {
+            log.info("The kafka consumer is closing.");
+            kafkaConsumer.close();
         }
     }
 }
